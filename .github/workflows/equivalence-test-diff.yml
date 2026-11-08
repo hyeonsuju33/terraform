@@ -15,7 +15,7 @@ permissions:
 jobs:
   equivalence-test-diff:
     name: "Equivalence Test Diff"
-    runs-on: ubuntu-latest
+    runs-on: xenoci-2vcpu-ubuntu-2404
 
     steps:
       - name: Fetch source code
