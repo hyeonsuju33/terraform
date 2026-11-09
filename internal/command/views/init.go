@@ -24,7 +24,6 @@ type Init interface {
 	Diagnostics(diags tfdiags.Diagnostics)
 	PolicyResult(addr string, resp policy.EvaluationResponse)
 	PolicyDiagnostics(diags policy.Diagnostics)
-	Output(messageCode InitMessageCode, params ...any)
 
 	// LogConfigurationCopyingStart describes the start of copying a module to create the root module in an empty directory.
 	LogConfigurationCopyingStart(moduleSource string)
@@ -39,28 +38,28 @@ type Init interface {
 	// LogInitializingBackendStart indicates progress initializing a backend.
 	LogInitializingBackendStart()
 
-	// LogMigrateBackendUnsetStart indicates that the backend has begun the process of being unset/successfully removed from the configuration.
+	// LogMigrateBackendUnsetStart indicates that the state is going to be migrated after unsetting/successfully removing from the configuration.
 	LogMigrateBackendUnsetStart(backendType string)
 
-	// LogMigrateBackendUnsetEnd indicates that the backend has been unset/successfully removed from the configuration.
+	// LogMigrateBackendUnsetEnd indicates that the state is going to be migrated after the backend has been unset/removed from the configuration.
 	LogMigrateBackendUnsetEnd(backendType string)
 
 	// LogMigrateBackendReconfigured indicates that the backend has been reconfigured successfully.
 	LogMigrateBackendReconfigured()
 
-	// LogMigrateFromBackendToBackend indicates that the backend is being migrated from one backend type to another.
+	// LogMigrateFromBackendToBackend indicates that the state is going to be migrated from one backend type to another.
 	LogMigrateFromBackendToBackend(oldType, newType string)
 
-	// LogMigrateFromBackendToCloud indicates that the backend is being migrated to the cloud.
+	// LogMigrateFromBackendToCloud indicates that the state is going to be migrated from the backend to the cloud.
 	LogMigrateFromBackendToCloud(backendType string)
 
-	// LogMigrateFromCloudToBackend indicates that the backend is being migrated from the cloud.
+	// LogMigrateFromCloudToBackend indicates that the state is going to be migrated from the cloud to the backend.
 	LogMigrateFromCloudToBackend(backendType string)
 
-	// LogMigrateFromCloudToLocal indicates that the backend is being migrated from the cloud to a local backend.
+	// LogMigrateFromCloudToLocal indicates that the state is going to be migrated from the cloud to a local backend.
 	LogMigrateFromCloudToLocal()
 
-	// LogMigrateCloudConfigurationChanged indicates that the backend is being migrated from the cloud to a local backend.
+	// LogMigrateCloudConfigurationChanged indicates that the backend is being migrated following a change in cloud configuration.
 	LogMigrateCloudConfigurationChanged()
 
 	// LogInitializingHCPTerraformStart indicates progress initializing the `cloud` backend.
@@ -96,8 +95,6 @@ type Init interface {
 
 	StateStoreProviderTrustLogger
 
-	prepareMessage(messageCode InitMessageCode, params ...any) string
-
 	Spacer // The `init` command logs empty lines to space-out different sections of human-readable output
 }
 
@@ -126,8 +123,13 @@ type InitHuman struct {
 func (v *InitHuman) Version() {}
 
 var (
-	_ Init                       = (*InitHuman)(nil)
-	_ ProviderInstallationLogger = (*InitHuman)(nil)
+	_ Init                          = (*InitHuman)(nil)
+	_ JSONOutputVersionLogger       = (*InitHuman)(nil)
+	_ Spacer                        = (*InitHuman)(nil)
+	_ ProviderInstallationLogger    = (*InitHuman)(nil)
+	_ ProviderLockingLogger         = (*InitHuman)(nil)
+	_ StateStoreProviderTrustLogger = (*InitHuman)(nil)
+	_ ModuleInstallationLogger      = (*InitHuman)(nil)
 )
 
 func (v *InitHuman) Diagnostics(diags tfdiags.Diagnostics) {
@@ -144,10 +146,6 @@ func (v *InitHuman) PolicyDiagnostics(diags policy.Diagnostics) {
 
 func (v *InitHuman) PolicyResult(addr string, resp policy.EvaluationResponse) {
 	v.view.PolicyResult(addr, resp)
-}
-
-func (v *InitHuman) Output(messageCode InitMessageCode, params ...any) {
-	v.print(v.prepareMessage(messageCode, params...))
 }
 
 func (v *InitHuman) LogConfigurationCopyingStart(moduleSource string) {
@@ -241,17 +239,14 @@ func (v *InitHuman) LogInitializingStateStoreStart(storeType string) {
 	v.print(fmt.Sprintf("\n[reset][bold]Initializing the state store %q...", storeType))
 }
 
-// Implements StateStoreProviderTrustLogger interface.
 func (v *InitHuman) LogInteractiveApproval() {
 	v.print(logInteractiveApprovalMessageHuman)
 }
 
-// Implements StateStoreProviderTrustLogger interface.
 func (v *InitHuman) LogInteractiveRejection() {
 	v.print(logInteractiveRejectionMessageHuman)
 }
 
-// Implements StateStoreProviderTrustLogger interface.
 func (v *InitHuman) LogAutomaticApproval() {
 	v.print(logInteractiveAutomaticApprovalMessageHuman)
 }
@@ -298,12 +293,10 @@ func (v *InitHuman) LogPartnerAndCommunityProviders() {
 	v.print(logPartnerAndCommunityProviders)
 }
 
-// Implements ProviderLockingLogger
 func (v *InitHuman) LogProviderLockfileCreated() {
 	v.print(createdLockInfoHuman)
 }
 
-// Implements ProviderLockingLogger
 func (v *InitHuman) LogProviderLockfileUpdated() {
 	v.print(dependenciesLockChangesInfo)
 }
@@ -335,12 +328,10 @@ func (v *InitHuman) LogModuleInstallationWithLocalPath(modulePath, localDir stri
 	v.print(fmt.Sprintf(moduleInstallationWithLocalPathHuman, modulePath, localDir))
 }
 
-// Implements ModuleInstallationLogger
 func (v *InitHuman) LogModuleUpgrade() {
 	v.print("[reset][bold]Upgrading modules...")
 }
 
-// Implements ModuleInstallationLogger
 func (v *InitHuman) LogModuleInitialization() {
 	v.print("[reset][bold]Initializing modules...")
 }
@@ -352,24 +343,6 @@ func (v *InitHuman) print(message string) {
 	v.view.streams.Println(message)
 }
 
-// prepareMessage retrieves a message template matching the InitMessageCode and
-// returns a formatted string made using the template and param argument(s).
-//
-// As this is implemented on InitHuman the human message template is used.
-func (v *InitHuman) prepareMessage(messageCode InitMessageCode, params ...any) string {
-	message, ok := MessageRegistry[messageCode]
-	if !ok {
-		// display the message code as fallback if not found in the message registry
-		return string(messageCode)
-	}
-
-	if message.HumanValue == "" {
-		panic("unexpected empty message for init message code: " + string(messageCode))
-	}
-
-	return fmt.Sprintf(message.HumanValue, params...)
-}
-
 // The InitJSON implementation renders streaming JSON logs, suitable for
 // integrating with other software.
 type InitJSON struct {
@@ -377,8 +350,13 @@ type InitJSON struct {
 }
 
 var (
-	_ Init                       = (*InitJSON)(nil)
-	_ ProviderInstallationLogger = (*InitJSON)(nil)
+	_ Init                          = (*InitJSON)(nil)
+	_ JSONOutputVersionLogger       = (*InitJSON)(nil)
+	_ Spacer                        = (*InitJSON)(nil)
+	_ ProviderInstallationLogger    = (*InitJSON)(nil)
+	_ ProviderLockingLogger         = (*InitJSON)(nil)
+	_ StateStoreProviderTrustLogger = (*InitJSON)(nil)
+	_ ModuleInstallationLogger      = (*InitJSON)(nil)
 )
 
 func (v *InitJSON) Version() {
@@ -399,26 +377,6 @@ func (v *InitJSON) PolicyDiagnostics(diags policy.Diagnostics) {
 
 func (v *InitJSON) PolicyResult(addr string, resp policy.EvaluationResponse) {
 	v.view.PolicyResult(addr, resp)
-}
-
-func (v *InitJSON) Output(messageCode InitMessageCode, params ...any) {
-	preppedMessage := v.prepareMessage(messageCode, params...)
-
-	// Logged data includes by default:
-	// @level as "info"
-	// @module as "terraform.ui" (See NewJSONView)
-	// @timestamp formatted in the default way
-	//
-	// In the method below we:
-	// * Set @message as the first argument value
-	// * Annotate with extra data:
-	//     "type":"init_output"
-	//     "message_code":"<value>"
-	v.view.log.Info(
-		preppedMessage,
-		"type", "init_output",
-		"message_code", string(messageCode),
-	)
 }
 
 func (v *InitJSON) initOutputLog(preppedMessage string, messageCode json.MessageType) {
@@ -539,7 +497,6 @@ func (v *InitJSON) LogInitializingStateStoreStart(storeType string) {
 	)
 }
 
-// Implements StateStoreProviderTrustLogger interface.
 func (v *InitJSON) LogInteractiveApproval() {
 	v.view.log.Info(
 		logInteractiveApprovalMessageJSON,
@@ -547,7 +504,6 @@ func (v *InitJSON) LogInteractiveApproval() {
 	)
 }
 
-// Implements StateStoreProviderTrustLogger interface.
 func (v *InitJSON) LogInteractiveRejection() {
 	v.view.log.Info(
 		logInteractiveRejectionMessageJSON,
@@ -555,7 +511,6 @@ func (v *InitJSON) LogInteractiveRejection() {
 	)
 }
 
-// Implements StateStoreProviderTrustLogger interface.
 func (v *InitJSON) LogAutomaticApproval() {
 	v.view.log.Info(
 		logInteractiveAutomaticApprovalMessageJSON,
@@ -605,12 +560,10 @@ func (v *InitJSON) LogPartnerAndCommunityProviders() {
 	v.view.Log(logPartnerAndCommunityProviders)
 }
 
-// Implements ProviderLockingLogger
 func (v *InitJSON) LogProviderLockfileCreated() {
 	v.initOutputLog(strings.TrimSpace(createdLockInfoJSON), json.MessageLockInfo)
 }
 
-// Implements ProviderLockingLogger
 func (v *InitJSON) LogProviderLockfileUpdated() {
 	v.initOutputLog(strings.TrimSpace(dependenciesLockChangesInfo), json.MessageDependenciesLockChangesInfo)
 }
@@ -643,43 +596,13 @@ func (v *InitJSON) LogModuleInstallationWithLocalPath(modulePath, localDir strin
 	v.view.Log(fmt.Sprintf(moduleInstallationWithLocalPathHuman, modulePath, localDir))
 }
 
-// Implements ModuleInstallationLogger
 func (v *InitJSON) LogModuleUpgrade() {
 	v.initOutputLog("Upgrading modules...", json.MessageUpgradingModulesMessage)
 }
 
-// Implements ModuleInstallationLogger
 func (v *InitJSON) LogModuleInitialization() {
 	v.initOutputLog("Initializing modules...", json.MessageInitializingModulesMessage)
 }
-
-// prepareMessage retrieves a message template matching the InitMessageCode and
-// returns a formatted string made using the template and param argument(s).
-//
-// As this is implemented on InitJSON the JSON message template is used.
-func (v *InitJSON) prepareMessage(messageCode InitMessageCode, params ...any) string {
-	message, ok := MessageRegistry[messageCode]
-	if !ok {
-		// display the message code as fallback if not found in the message registry
-		return string(messageCode)
-	}
-
-	if message.JSONValue == "" {
-		panic("unexpected empty message for init message code: " + string(messageCode))
-	}
-
-	return strings.TrimSpace(fmt.Sprintf(message.JSONValue, params...))
-}
-
-// InitMessage represents a message string in both json and human decorated text format.
-type InitMessage struct {
-	HumanValue string
-	JSONValue  string
-}
-
-var MessageRegistry map[InitMessageCode]InitMessage = map[InitMessageCode]InitMessage{}
-
-type InitMessageCode string
 
 const outputInitEmpty = `
 [reset][bold]Terraform initialized in an empty directory![reset]
